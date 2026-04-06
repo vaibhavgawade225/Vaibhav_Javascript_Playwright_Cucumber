@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+  schedule:
+    - cron: '45 15 * * *'  # Runs at 9:15 PM IST (3:45 PM UTC) daily
 
 permissions:
   contents: read
@@ -61,29 +63,59 @@ jobs:
           name: test-logs-node${{ matrix.node-version }}
           path: logs/
 
-  publish-report:
+  send-report:
     needs: test
     if: always()
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download report from Node 20 run
+      - name: Download test report
         uses: actions/download-artifact@v4
         with:
           name: cucumber-report-node20
-          path: report/
+          path: reports/
 
-      - name: Download screenshots (if any)
+      - name: Download test logs
+        uses: actions/download-artifact@v4
+        with:
+          name: test-logs-node20
+          path: logs/
+        continue-on-error: true
+
+      - name: Download failure screenshots
         uses: actions/download-artifact@v4
         with:
           name: failure-screenshots-node20
-          path: report/screenshots/
+          path: screenshots/
         continue-on-error: true
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: report/
+      - name: Zip artifacts for email
+        run: |
+          zip -r test-report.zip reports/ logs/ screenshots/ 2>/dev/null || zip -r test-report.zip reports/ logs/ 2>/dev/null || zip -r test-report.zip reports/
 
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+      - name: Send email with report
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Cucumber BDD Test Report - ${{ github.repository }} - ${{ needs.test.result }}"
+          to: ${{ secrets.REPORT_EMAIL }}
+          from: ${{ secrets.SMTP_USERNAME }}
+          body: |
+            Hello,
+
+            The Cucumber BDD test pipeline has completed for repository: ${{ github.repository }}
+
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Triggered by: ${{ github.actor }}
+            Overall Result: ${{ needs.test.result }}
+            Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please find the test report attached.
+
+            Regards,
+            GitHub Actions
+          attachments: test-report.zip
